@@ -1,0 +1,66 @@
+---
+title: "Assignment-1 FML"
+output: html_document
+date: "2025-09-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+#Importing libaries
+library(ggplot2)
+library(dplyr)
+```
+```{r}
+#reading the data
+data <- read.csv("Employers_data.csv", stringsAsFactors = TRUE)
+```
+
+```{r}
+# Quantitative variables
+summary(data$Age)
+summary(data$Salary)
+```
+
+
+```{r}
+# Categorical variables
+table(data$Gender)
+table(data$Department)
+```
+
+
+```{r}
+# Transform a variable
+## Example: log-transform Salary
+```
+
+
+
+```{r}
+# Plot quantitative variable
+## Histogram of Age
+ggplot(data, aes(x = Age)) +
+  geom_histogram(binwidth = 5, fill = "pink", color = "black") +
+  labs(title = "Histogram of Employee Age", x = "Age", y = "Count")
+```
+
+
+```{r}
+# Scatterplot
+## Scatterplot of Experience vs Salary
+ggplot(data, aes(x = Experience_Years, y = Salary, color = Department)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "Experience vs Salary by Department", x = "Experience (Years)", y = "Salary")
+
+```
+
+```
+
+```
+
+```
+
