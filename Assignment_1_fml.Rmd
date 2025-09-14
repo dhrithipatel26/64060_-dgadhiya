@@ -1,0 +1,84 @@
+---
+title: "Assignment-1 FML"
+output: html_document
+date: "2025-09-09"
+---
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+#Importing libaries
+library(ggplot2)
+library(dplyr)
+```
+
+
+
+```{r}
+#reading the data
+employer <- read.csv("Employers_data.csv", stringsAsFactors = TRUE)
+```
+
+
+
+```{r}
+# Quantitative variables
+summary(employer$Age)
+summary(employer$Salary)
+```
+
+
+```{r}
+# Categorical variables
+
+table(employer$Gender)
+table(employer$Department)
+```
+
+
+
+```{r}
+# Transforming a variable (employer salary into employer salary thousand)
+
+employer$Salary_thousands <- employer$Salary / 1000
+summary(employer$Salary_thousands)
+
+# Create Age Group variable
+employer$Age_Group <- ifelse(employer$Age < 30, "Young",
+                  ifelse(employer$Age < 50, "Mid-age", "Senior"))
+table(employer$Age_Group)
+
+
+```
+
+
+
+```{r}
+# Plotting quantitative variable
+## Histogram 
+ggplot(employer, aes(x = Age)) +
+  geom_histogram(binwidth = 5, fill = "pink", color = "black") +
+  labs(title = "Histogram of Employee Age", x = "Age", y = "Count")
+```
+
+
+```{r}
+## Scatterplot of Experience vs Salary
+ggplot(employer, aes(x = Experience_Years, y = Salary, color = Department)) +
+  geom_point(alpha = 0.6) +
+  labs(title = "Experience vs Salary by Department", x = "Experience (Years)", y = "Salary")
+
+```
+
+```
+
+```
+
+```
+
