@@ -1,0 +1,308 @@
+---
+title: "FML-ASSIGNMENT_3 "
+author: "Dhrithi Gadhiya"
+date: "2025-10-12"
+output: html_document 
+---
+
+```{r}
+library(tidyverse)   # data wrangling + readr
+library(reshape2)    # melt(), dcast()
+library(e1071)       # naiveBayes()
+
+# ---- Load dataset (update file name if needed) ----
+data_raw <- read_csv("C:/Users/dhrit/Downloads/UniversalBank (1).csv", show_col_types = FALSE)
+
+# ---- Clean column headers (replace spaces with dots) ----
+names(data_raw) <- gsub(" ", ".", names(data_raw), fixed = TRUE)
+
+# ---- Rename key columns (handle possible label variations) ----
+bank_data <- data_raw %>%
+  rename(
+    InternetBanking = any_of(c("Online","online","ONLINE")),
+    CardUser        = any_of(c("CreditCard","Credit.Card","CC","creditcard","CREDITCARD")),
+    LoanHolder      = any_of(c("Personal.Loan","PersonalLoan","Loan","personal.loan"))
+  )
+
+# ---- Select only the relevant features ----
+needed_cols <- c("InternetBanking","CardUser","LoanHolder")
+missing_cols <- setdiff(needed_cols, names(bank_data))
+if (length(missing_cols) > 0) {
+  stop("Missing essential columns: ", paste(missing_cols, collapse = ", "))
+}
+bank_data <- bank_data %>% select(all_of(needed_cols))
+
+# ---- Convert to clean binary (0/1) variables ----
+convert_binary <- function(col) {
+  if (is.logical(col)) return(as.integer(col))
+  if (is.numeric(col)) {
+    if (all(is.na(col) | col %in% c(0,1))) return(as.integer(col))
+    return(as.integer(col != 0))
+  }
+  col_chr <- tolower(trimws(as.character(col)))
+  yes_vals <- c("1","yes","y","true","t")
+  no_vals  <- c("0","no","n","false","f")
+  out <- rep(NA_integer_, length(col_chr))
+  out[col_chr %in% yes_vals] <- 1L
+  out[col_chr %in% no_vals]  <- 0L
+  if (any(is.na(out))) {
+    unexpected <- unique(col_chr[is.na(out)])
+    stop("Cannot convert to binary; unexpected values: ", paste(unexpected, collapse = ", "))
+  }
+  out
+}
+
+bank_data <- bank_data %>%
+  mutate(
+    InternetBanking = convert_binary(InternetBanking),
+    CardUser        = convert_binary(CardUser),
+    LoanHolder      = convert_binary(LoanHolder)
+  )
+
+stopifnot(all(bank_data$InternetBanking %in% c(0,1)),
+          all(bank_data$CardUser        %in% c(0,1)),
+          all(bank_data$LoanHolder      %in% c(0,1)))
+
+# ---- Split into training (60%) and validation (40%) ----
+set.seed(12345)   # reproducible results
+total_rows  <- nrow(bank_data)
+train_rows  <- floor(0.60 * total_rows)
+train_index <- sample.int(total_rows, train_rows)
+
+train_set <- bank_data[train_index, ]
+valid_set <- bank_data[-train_index, ]
+
+cat("Data split -> total:", total_rows,
+    "| training:", nrow(train_set),
+    "| validation:", nrow(valid_set), "\n\n")
+
+
+
+#The above code performs data preparation and splitting for the Universal Bank dataset. First, it loads the required R libraries and imports the dataset while cleaning the column names for consistency. It then renames the key variables — InternetBanking, CardUser, and LoanHolder — so they are standardized and easy to work with.
+
+#Next, the code ensures that all three variables contain clean binary values (0 or 1), making them suitable for statistical analysis and modeling. Finally, the dataset is divided into two parts: 60% for training (used to build models) and 40% for validation (used to test how well those models perform). This process ensures the analysis is both structured and reliable.
+```
+
+A) Pivot showing counts by CardUser and LoanHolder across InternetBanking levels.
+```{r}
+#Q. Create a pivot table for the training data with Online as a column variable, CC as a row variable, and Loan as a secondary row variable. The values inside the table should convey the count. In R use functions melt() and cast(), or function table(). In Python, use panda dataframe methods melt() and pivot()
+
+# 3D contingency: CardUser x LoanHolder x InternetBanking
+tab_A_3d <- with(train_set, table(CardUser = CardUser, LoanHolder = LoanHolder, InternetBanking = InternetBanking))
+cat("A) 3D table (CardUser x LoanHolder x InternetBanking)\n"); print(tab_A_3d); cat("\n")
+
+# Create readable 2D pivot using melt() + dcast(): rows = (CardUser, LoanHolder), columns = InternetBanking
+m_A <- melt(train_set, id.vars = c("CardUser","LoanHolder"), measure.vars = "InternetBanking")
+
+A_counts <- m_A %>%
+  group_by(CardUser, LoanHolder, InternetBanking = value) %>%
+  summarise(count = n(), .groups = "drop")
+
+pivot_A <- dcast(A_counts, CardUser + LoanHolder ~ InternetBanking, value.var = "count", fill = 0)
+
+names(pivot_A)[names(pivot_A) == "0"] <- "InternetBanking_0"
+names(pivot_A)[names(pivot_A) == "1"] <- "InternetBanking_1"
+
+cat("A) Pivot (rows = CardUser, LoanHolder; cols = InternetBanking)\n"); print(pivot_A); cat("\n")
+
+#This pivot table summarizes how CardUser, LoanHolder, and InternetBanking are related. It shows the number of customers for each combination of card and loan status across internet banking usage levels, helping identify patterns such as whether card or loan users are more likely to use internet banking.
+
+
+```
+
+(B) Probability calculated from the pivot:
+The chance that a customer has a LoanHolder = 1, given that CardUser = 1 and InternetBanking = 1.
+```{r}
+#Q.Consider the task of classifying a customer who owns a bank credit card and is actively using online banking services. Looking at the pivot table, what is the probability that this customer will accept the loan offer? [This is the probability of loan acceptance (Loan = 1) conditional on having a bank credit card (CC = 1) and being an active user of online banking services (Online= 1)].
+
+# Count LoanHolder=1, CardUser=1, InternetBanking=1
+num_LH1_CU1_IB1 <- tab_A_3d["1", "1", "1"]
+
+# Denominator: all LoanHolder values (0/1) when CardUser=1 & InternetBanking=1
+den_CU1_IB1 <- sum(tab_A_3d["1", , "1"])
+
+# Empirical probability P(LoanHolder=1 | CardUser=1, InternetBanking=1)
+p_table_B <- ifelse(den_CU1_IB1 > 0, num_LH1_CU1_IB1 / den_CU1_IB1, NA_real_)
+
+cat("B) Empirical P(LoanHolder=1 | CardUser=1, InternetBanking=1) =",
+    round(p_table_B, 6), "\n\n")
+
+#This step calculates the empirical probability that a customer has a loan (LoanHolder = 1) when they are both a credit card user (CardUser = 1) and use internet banking (InternetBanking = 1).
+
+#In simple terms, it looks at all the customers who use both a credit card and internet banking, and then checks what portion of them have taken a loan. The numerator represents the number of customers who meet all three conditions, while the denominator includes everyone with a credit card and internet banking, regardless of whether they have a loan or not.
+
+#This probability shows the actual observed likelihood from the dataset, not a model-based estimate. It helps understand how closely credit card usage and online banking are linked with loan ownership among customers.
+
+```
+
+(C) Two pivot summaries were prepared: one compares LoanHolder with InternetBanking, and the other compares LoanHolder with CardUser
+```{r}
+#Q.Create two separate pivot tables for the training data. One will have Loan (rows) as a function of Online (columns) and the other will have Loan (rows) as a function of CC
+
+# Contingency tables for LoanHolder vs InternetBanking and LoanHolder vs CardUser
+tab_C_internet <- with(train_set, table(LoanHolder = LoanHolder, InternetBanking = InternetBanking))
+tab_C_card     <- with(train_set, table(LoanHolder = LoanHolder, CardUser = CardUser))
+
+cat("C1) LoanHolder ~ InternetBanking\n"); print(tab_C_internet); cat("\n")
+cat("C2) LoanHolder ~ CardUser\n");        print(tab_C_card);     cat("\n")
+
+#In this step, two contingency tables were created to understand how loan acceptance relates to customers’ use of internet banking and credit cards.
+
+#The first table (LoanHolder ~ InternetBanking) shows how many customers who accepted or did not accept a personal loan also use internet banking. This helps identify whether online banking users are more likely to take personal loans compared to those who don’t use online services.
+
+#The second table (LoanHolder ~ CardUser) compares loan holders with credit card users. It highlights whether customers who own a credit card are more inclined to take a loan than those without one.
+
+#Together, these summaries provide a quick way to see the relationship between loan decisions and digital or credit behaviors, helping the bank understand which customer segments are more likely to accept loans.
+
+```
+
+(D) Calculate the necessary probability values.
+```{r}
+#Q.Compute the following quantities [P(A | B) means “the probability ofA given B”]:
+# ---- Part D ----
+N_train     <- nrow(train_set)
+loan_counts <- with(train_set, table(LoanHolder))
+
+#i) P(CC = 1 | Loan = 1) (the proportion of credit card holders among the loan acceptors)
+#P(CardUser=1 | LoanHolder=1)
+p_CU1_LH1 <- ifelse(loan_counts["1"] > 0, tab_C_card["1", "1"] / loan_counts["1"], NA_real_)
+
+# ii) P(Online = 1 | Loan = 1)
+#P(InternetBanking=1 | LoanHolder=1)
+p_IB1_LH1 <- ifelse(loan_counts["1"] > 0, tab_C_internet["1", "1"] / loan_counts["1"], NA_real_)
+
+# iii) P(Loan = 1) (the proportion of loan acceptors)
+#P(LoanHolder=1)
+p_LH1 <- as.numeric(loan_counts["1"]) / N_train
+
+# iv) P(CC = 1 | Loan = 0) 
+#P(CardUser=1 | LoanHolder=0)
+p_CU1_LH0 <- ifelse(loan_counts["0"] > 0, tab_C_card["0", "1"] / loan_counts["0"], NA_real_)
+
+# v) P(Online = 1 | Loan = 0)  
+#P(InternetBanking=1 | LoanHolder=0)
+p_IB1_LH0 <- ifelse(loan_counts["0"] > 0, tab_C_internet["0", "1"] / loan_counts["0"], NA_real_)
+
+# vi) P(Loan = 0) 
+#P(LoanHolder=0)
+p_LH0 <- as.numeric(loan_counts["0"]) / N_train
+
+cat("D) Required probabilities:\n")
+print(c(
+  `P(CardUser=1 | LoanHolder=1)`        = round(p_CU1_LH1, 6),
+  `P(InternetBanking=1 | LoanHolder=1)` = round(p_IB1_LH1, 6),
+  `P(LoanHolder=1)`                     = round(p_LH1, 6),
+  `P(CardUser=1 | LoanHolder=0)`        = round(p_CU1_LH0, 6),
+  `P(InternetBanking=1 | LoanHolder=0)` = round(p_IB1_LH0, 6),
+  `P(LoanHolder=0)`                     = round(p_LH0, 6)
+)); cat("\n")
+
+#In this part, several probability values were calculated to understand how the likelihood of being a loan holder relates to customers’ credit card usage and online banking activity
+
+#First, the conditional probabilities P(CardUser=1∣LoanHolder=1) P(InternetBanking=1 ∣LoanHolder=1)show the proportion of loan holders who also use a credit card or internet banking. These help reveal how common these digital or credit behaviors are among customers who accepted loans.
+
+#Next, the overall probability P(LoanHolder=1) measures the share of all customers who took a loan. Similarly P(CardUser=1∣LoanHolder=0)andP(InternetBanking=1∣LoanHolder=0)show how often non-loan customersuse these services. Finally,P(LoanHolder=0)captures the proportion of customers who did not accept a loan
+
+#Together, these probabilities provide the foundational values needed for applying the Naive Bayes model in the next step, helping assess how credit card and online banking usage relate to loan acceptance behavior
+
+```
+
+
+(E) Manual computation of Naive Bayes probability for Loan=1
+```{r}
+#Q.Use the quantities computed above to compute the naive Bayes probability P(Loan= 1 | CC= 1, Online = 1) 
+
+# ---- Part E ----
+# Naive Bayes independence assumption:
+# numerator1 = P(CardUser=1 | LoanHolder=1) * P(InternetBanking=1 | LoanHolder=1) * P(LoanHolder=1)
+# numerator0 = P(CardUser=1 | LoanHolder=0) * P(InternetBanking=1 | LoanHolder=0) * P(LoanHolder=0)
+
+num_LH1 <- p_CU1_LH1 * p_IB1_LH1 * p_LH1
+num_LH0 <- p_CU1_LH0 * p_IB1_LH0 * p_LH0
+
+p_nb_E <- num_LH1 / (num_LH1 + num_LH0)
+
+cat("E) Naive Bayes posterior P(LoanHolder=1 | CardUser=1, InternetBanking=1) =",
+    round(p_nb_E, 6), "\n\n")
+
+
+#Interpretation (E)
+
+#The Naive Bayes model estimates that the probability of a customer having a loan (LoanHolder = 1), given that they use a credit card (CardUser = 1) and use internet banking (InternetBanking = 1), is 0.100669 (around 10.07%).
+
+#This means that according to the Naive Bayes assumption of independence between credit card use and internet banking, only about 10% of such customers are likely to have a loan.
+
+```
+
+(F) Comparison of empirical and Naive Bayes probabilities.
+```{r}
+#Q. Compare this value with the one obtained from the pivot table in (B). Which is a more accurate estimate?
+# ---- Part F ----
+comparison <- c(
+  Empirical_from_Pivot_B     = p_table_B,
+  Naive_Bayes_from_E         = p_nb_E,
+  Difference_NB_minus_Pivot  = p_nb_E - p_table_B
+)
+
+cat("F) Comparison (Naive Bayes minus Pivot shown too):\n")
+print(round(comparison, 6))
+cat("\n")
+
+# Guidance for your report:
+# - The pivot value represents the observed conditional probability in TRAINING data
+#   for (CardUser=1, InternetBanking=1).
+# - The Naive Bayes estimate is model-based and may differ if
+#   CardUser and InternetBanking are not conditionally independent within LoanHolder classes.
+
+#In this step, the empirical probability obtained from the pivot table is compared with the probability estimated by the Naive Bayes model. The empirical value represents the actual observed proportion of customers with both a credit card and internet banking who accepted a loan, based directly on the training data.
+
+#The Naive Bayes estimate, on the other hand, is a model-based probability that assumes independence between the predictors — in this case, credit card usage and internet banking — within each loan category.
+
+#By comparing the two values, we can see how closely the model aligns with the real data. If the difference between them is small, it suggests that the Naive Bayes assumption of conditional independence holds reasonably well. However, a large difference would indicate that the predictors are not fully independent, meaning the model’s simplification doesn’t perfectly match the real relationships in the data.
+
+```
+(G) Identify which entries from the contingency table are required to calculate
+```{r}
+#Q. Which of the entries in this table are needed for computing P(Loan = 1 | CC = 1, Online = 1)? Run naive Bayes on the data. Examine the model output on training data, and find the entry that corresponds to P(Loan = 1 | CC = 1, Online = 1). Compare this to the number you obtained in (E).
+
+cat("G) Needed entries for Naive Bayes:\n",
+    "  P(CardUser=1|LoanHolder=1), P(InternetBanking=1|LoanHolder=1), P(LoanHolder=1),\n",
+    "  P(CardUser=1|LoanHolder=0), P(InternetBanking=1|LoanHolder=0), P(LoanHolder=0)\n\n", sep = "")
+
+# ---- Train Naive Bayes using ONLY CardUser and InternetBanking on the training set ----
+nb_model <- naiveBayes(
+  x = train_set %>% transmute(
+    CardUser        = factor(CardUser),
+    InternetBanking = factor(InternetBanking)
+  ),
+  y = factor(train_set$LoanHolder),
+  laplace = 1   # smoothing avoids zero probabilities
+)
+
+# ---- Model posterior for a customer with CardUser=1 and InternetBanking=1 ----
+new_case <- data.frame(
+  CardUser        = factor(1, levels = c(0, 1)),
+  InternetBanking = factor(1, levels = c(0, 1))
+)
+
+posterior_G <- predict(nb_model, newdata = new_case, type = "raw")
+p_nb_model <- as.numeric(posterior_G[, "1"])
+
+cat("G) Naive Bayes model posterior for (CardUser=1, InternetBanking=1):\n")
+print(posterior_G); cat("\n")
+
+cat("Compare model vs manual NB (E):\n")
+print(round(c(
+  NB_model_posterior      = p_nb_model,
+  Manual_NB_from_E        = p_nb_E,
+  Diff_Model_minus_Manual = p_nb_model - p_nb_E
+), 6)); cat("\n")
+
+
+#In this part, the key probability components needed for the Naive Bayes calculation were identified and used to train a model. These include the conditional probabilities of being a credit card user and an internet banking user within both loan-holder and non-loan-holder groups, as well as the overall probabilities of having or not having a loan.
+
+#Using only these two predictors — credit card usage and internet banking — the Naive Bayes model was trained to estimate the probability that a customer with both features (CardUser = 1 and InternetBanking = 1) would take a loan. The model then generated a posterior probability for this case, which represents the likelihood of loan acceptance given those characteristics.
+
+#Finally, this model-based probability was compared with the manually computed Naive Bayes probability from the earlier step. If the two values are very close, it confirms that the model correctly applies the same logic as the manual calculation and that the Naive Bayes approach effectively captures the underlying relationships between these variables
+```
+
