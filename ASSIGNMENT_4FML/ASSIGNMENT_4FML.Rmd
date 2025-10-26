@@ -1,0 +1,215 @@
+---
+title: "ASSIGNMENT_4FML"
+author: "Dhrithi Gadhiya"
+date: "2025-10-26"
+output: html_document
+---
+
+
+#Step1 - Package Installation and Loading
+```{r}
+#Load Libraries
+library(tidyverse)   # for data handling, transformation, and analysis
+library(cluster)     # provides clustering algorithms and evaluation metrics
+library(factoextra)  # helps visualize and interpret clustering results
+library(janitor)     # simplifies data cleaning and column name formatting
+
+# Set seed for reproducibility
+set.seed(123)
+```
+
+
+#Step2- Dataset Loading and Cleaning
+```{r}
+
+bio_data_raw <- read_csv("C:/Users/dhrit/Downloads/Pharmaceuticals.csv")   # read the dataset
+
+# Standardize column names for consistency
+bio_data <- bio_data_raw %>% clean_names()
+
+# Display column names to verify changes
+names(bio_data)
+
+# Extract only numerical features for clustering
+bio_numeric <- bio_data %>%
+  select(where(is.numeric)) %>%
+  drop_na()
+
+# Store non-numeric (categorical) fields separately for later insights
+bio_categorical <- bio_data %>%
+  select(where(is.character) | where(is.factor))
+
+# Quickly review the structure of the numeric data
+glimpse(bio_numeric)
+
+#Interpretation:
+#In this step, the  pharmaceuticals.csv dataset is imported into R and organized to ensure efficient analysis.The clean_names() function standardizes all column names, removing spaces and special characters to maintain consistency and prevent syntax errors during later processing.The dataset is then divided into two components, Numeric variables-which are suitable for clustering analysis, and Categorical variables-which are retained for interpretative comparisons after clustering.
+#Rows containing missing values are eliminated using drop_na() to maintain data quality and accuracy.
+#The glimpse() function provides a concise overview of the dataset structure, confirming that all numeric variables are correctly formatted.
+#This preparation stage ensures that the dataset is clean, well-structured, and ready for accurate and reliable clustering in the following steps
+
+```
+
+
+#Step3 — Scaling of Numeric Data
+```{r}
+
+# Convert any non-numeric values to numeric where applicable
+bio_numeric <- bio_numeric %>%
+  mutate(across(everything(), ~ suppressWarnings(as.numeric(.x))))
+
+# Apply scaling to bring all numeric features to the same scale
+bio_scaled <- scale(bio_numeric)
+
+# Check the summary to verify successful standardization
+summary(as.data.frame(bio_scaled))
+
+
+#Interpretation:
+#In this step, all numeric variables are standardized to maintain consistency in their measurement scales. Since the dataset includes features recorded in different units, standardization ensures that no single variable dominates the clustering outcome. 
+#The scale() function adjusts each value relative to its mean and standard deviation, effectively converting all variables into a comparable range.This transformation allows the clustering algorithm to focus on patterns and relationships among data points rather than the absolute size of their values.
+#Standardizing the data enhances the accuracy of the K-Means algorithm and ensures that all variables contribute equally and fairly to the formation of clusters.
+
+```
+
+#Step-4 Cluster Number Optimization
+```{r}
+
+# Define a range of possible cluster counts to test
+cluster_range <- 2:7
+
+# Elbow Method — Calculate total within-cluster sum of squares (WSS)
+elbow_values <- map_dbl(cluster_range, function(k){
+  kmeans(bio_scaled, centers = k, nstart = 25, iter.max = 100)$tot.withinss
+})
+
+# Silhouette Method — Compute average silhouette width
+silhouette_values <- map_dbl(cluster_range, function(k){
+  cluster_model <- kmeans(bio_scaled, centers = k, nstart = 25)
+  silhouette_data <- silhouette(cluster_model$cluster, dist(bio_scaled))
+  mean(silhouette_data[, "sil_width"])
+})
+
+# Plot both methods side by side for comparison
+par(mfrow = c(1,2))
+plot(cluster_range, elbow_values, type = "b", pch = 16, 
+     main = "Elbow Method", xlab = "Number of Clusters (K)", ylab = "Total WSS")
+plot(cluster_range, silhouette_values, type = "b", pch = 16, 
+     main = "Silhouette Method", xlab = "Number of Clusters (K)", ylab = "Average Silhouette Score")
+par(mfrow = c(1,1))
+
+# Determine the most suitable K using the maximum silhouette value
+optimal_k <- cluster_range[which.max(silhouette_values)]
+optimal_k
+
+#Interpretation:
+#In this step, the optimal number of clusters for the standardized dataset bio_scaled is identified. The Elbow Method and Silhouette Method are applied to compare how well the data fits into different cluster counts.The Elbow Method helps find the point where adding more clusters doesn’t significantly improve model fit, while the Silhouette Method evaluates how clearly separated the clusters are.
+#The value of optimal_k with the highest silhouette score is then selected as the most suitable number of clusters, ensuring that the grouping is both meaningful and well-structured for further analysis.
+
+```
+
+
+
+#Step5 — implementation of K-Means Algorithm
+```{r}
+# Perform K-Means using the optimal number of clusters
+bio_kmeans_model <- kmeans(bio_scaled, centers = optimal_k, nstart = 50, iter.max = 200)
+
+# Assign cluster labels to the original dataset
+bio_clustered <- bio_data %>%
+  mutate(Cluster = factor(bio_kmeans_model$cluster))
+
+# Display the first few rows of the clustered dataset
+head(bio_clustered)
+
+#Interpretation:
+#In this step, the K-Means algorithm is applied to the standardized dataset bio_scaled using the optimal number of clusters determined earlier (optimal_k). This process groups the data into distinct clusters based on similarity among observations.Each record in the dataset is then assigned to a specific cluster, and this information is added back to the original dataset as a new column named Cluster. Viewing the updated dataset provides an initial look at how the data points have been categorized.
+#This step is essential as it transforms the prepared data into meaningful groups, allowing further analysis of similarities and differences across clusters in the upcoming steps.
+
+```
+#Step6 — Summary and Analysis of Clusters
+```{r}
+
+# Calculate the mean of numeric variables for each cluster
+bio_cluster_summary <- bio_clustered %>%
+  group_by(Cluster) %>%
+  summarise(across(1:9, mean, na.rm = TRUE))
+
+# Display the summary for each cluster
+bio_cluster_summary
+
+#Interpretation:
+#This step provides a summary of each cluster by calculating the average values of all numeric variables within them. Using the grouped dataset bio_clustered, the mean for every variable is computed separately for each cluster, helping to identify how they differ in terms of their characteristics. The resulting table bio_cluster_summary highlights key patterns within the clusters — for instance, one cluster may show higher averages for certain performance indicators, while another may reflect moderate or lower values. By comparing these averages, it becomes easier to interpret what each cluster represents and understand the general profile of the groups formed through K-Means clustering. This summary acts as the foundation for drawing insights in the later stages of analysis.
+```
+
+#Step7- Cluster Visualization and Representation
+```{r}
+
+# Step 7 - Enhanced Cluster Visualization with PCA
+fviz_cluster(list(data = bio_scaled, cluster = bio_kmeans_model$cluster),
+             geom = "point",
+             ellipse.type = "convex",          # Use convex hulls instead of normal ellipses
+             repel = TRUE,                     # Avoid label overlapping
+             ggtheme = theme_minimal(),
+             palette = "jco",                  # Color palette
+             main = "Enhanced Cluster Visualization (PCA)",
+             pointsize = 2) + 
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+
+#Interpretation:
+#This step provides an enhanced visual representation of the clusters using Principal Component Analysis (PCA). The fviz_cluster() function plots the observations in two dimensions based on the principal components derived from the standardized dataset bio_scaled.
+#Key improvements in this visualization include:
+#Convex hulls around clusters (ellipse.type = "convex") clearly outline the boundaries of each group. Repel labels (repel = TRUE) prevent overlapping, improving readability of cluster identifiers.A custom color palette and formatted title enhance clarity and presentation.
+#This enhanced plot makes it easier to see the relative positions, separation, and spread of clusters, providing a more intuitive understanding of how the K-Means algorithm has grouped similar observations. It also helps identify clusters that are well-separated versus those with some overlap, offering insight into the structure and cohesion of the data.
+
+```
+
+
+#Step8 - Analysis of Categorical Features by Cluster
+```{r}
+# Create cross-tabulations of clusters with selected categorical variables
+cat_table1 <- table(bio_clustered$Cluster, bio_clustered[[10]])
+cat_table2 <- table(bio_clustered$Cluster, bio_clustered[[11]])
+cat_table3 <- table(bio_clustered$Cluster, bio_clustered[[12]])
+
+# Display the tables
+cat_table1
+cat_table2
+cat_table3
+
+#Interpretation:
+
+#Although the clustering was performed using only numeric variables, it is useful to examine how the resulting clusters relate to categorical features.Cross-tabulation tables (cat_table1, cat_table2, cat_table3) show the distribution of each categorical variable across the clusters in bio_clustered.
+#This analysis helps identify patterns or associations between cluster membership and categorical attributes, such as company type, location, or market segment. For example, certain clusters may predominantly contain companies from a specific region, or one cluster may align with a particular category more than others. By connecting numeric cluster results with categorical characteristics, this step adds context to the clusters and provides deeper insights into the composition and traits of each group.
+
+```
+
+
+#Step9 - Characterizing and Naming Clusters
+```{r}
+# Convert the scaled dataset to a data frame and add cluster assignments
+scaled_bio_df <- as.data.frame(bio_scaled)
+scaled_bio_df$Cluster <- bio_kmeans_model$cluster
+
+# Calculate cluster-wise averages for numeric variables
+cluster_profiles <- scaled_bio_df %>%
+  group_by(Cluster) %>%
+  summarise(across(1:9, mean, na.rm = TRUE))
+
+# Display the cluster profiles
+cluster_profiles
+
+#Interpretation:
+#In this step, the characteristics of each cluster are examined to assign meaningful names.The standardized dataset scaled_bio_df is used to calculate the average values of all numeric variables within each cluster, producing cluster_profiles. By reviewing these profiles, it becomes possible to identify the defining traits of each group. For example, one cluster may exhibit higher values across key performance indicators, indicating strong-performing entities, while another may show lower averages, representing less prominent or riskier profiles. Assigning descriptive names to clusters based on these patterns helps translate the numerical results into interpretable insights, making it easier to communicate the findings and understand the behavior of different groups within the dataset.
+
+```
+
+
+```{r}
+#Summary:
+#The K-Means clustering analysis effectively segmented the pharmaceutical dataset into distinct and interpretable groups based on numerical attributes. Comprehensive data cleaning and standardization ensured that all variables contributed equally to the clustering process, enhancing the reliability of results. The optimal number of clusters was identified using the Elbow and Silhouette methods, balancing within-cluster similarity and between-cluster separation. Visualization through PCA confirmed the structural validity of the clusters, showing clear boundaries and cohesion among data points. Further examination of categorical variables provided additional context, linking quantitative patterns with qualitative insights. Overall, this analysis highlights the power of clustering techniques in uncovering hidden structures within complex datasets and supports data-driven understanding of patterns within the pharmaceutical sector.
+```
+
+
+
+
