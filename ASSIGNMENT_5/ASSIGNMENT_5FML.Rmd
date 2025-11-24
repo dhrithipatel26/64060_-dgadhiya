@@ -1,0 +1,163 @@
+---
+title: "ASSIGNMENT_5FML"
+author: "Dhrithi Gadhiya"
+date: "2025-11-24"
+output: html_document
+---
+
+#Step-1 Importing the Data and Cleaning Missing Entries
+```{r}
+library(readr)
+
+# Import dataset from local directory
+cereal_input_df <- read_csv("C:/Users/dhrit/Downloads/Cereals.csv")
+
+# Drop records with any missing fields
+cereal_filtered_df <- na.omit(cereal_input_df)   # Remove any rows that contain missing values
+
+
+# Extract only numeric variables for clustering tasks
+numeric_features_df <- cereal_filtered_df[sapply(cereal_filtered_df, is.numeric)]  # Keep only numeric columns for distance calculations
+
+#Interpretation:
+#The first thing the code does is bring the cereal dataset into R so it can be worked with. Since missing values can cause problems during clustering, any rows with incomplete information are removed right away. This gives us a cleaner and more reliable starting point. After that, the code keeps only the numerical columns, because hierarchical clustering depends on distance calculations, which can only be done with numeric data. Text or category-based fields don’t work for this type of analysis, so they are filtered out.
+#By the end of this step, we’re left with a dataset that is clean, complete, and made up entirely of numeric features. This prepares the data for the normalization and clustering steps that follow and helps ensure that the results we get are consistent and meaningful.
+
+```
+#Step-2 Normalization of Numeric Variables and Distance Calculation
+```{r}
+# Normalize the numeric data using z-scores
+scaled_cereal_data <- scale(numeric_features_df)      # Standardize all numeric columns
+
+# Compute the Euclidean distance matrix for clustering
+distance_matrix_euclid <- dist(scaled_cereal_data, 
+                               method = "euclidean")  # Calculate distances between cereals
+
+# Quick summary of the scaled dataset
+summary(scaled_cereal_data)                           # Check distribution after scaling
+
+#Interpretation:
+#This part of the analysis gets the data ready for hierarchical clustering by putting all numeric variables on the same scale. The scale() function converts each numeric column into z-scores, which centers the values and adjusts them to have similar spreads. This step prevents variables with larger numeric ranges from dominating the clustering results.
+#After the data is standardized, the code calculates the Euclidean distance between every pair of cereals. These distances tell us how similar or different each cereal is based on their nutritional features. Finally, the summary of the standardized data is displayed to verify that each variable has been properly normalized. This ensures that the clustering process is fair, accurate, and not influenced by differences in measurement units
+```
+#Step-3 AGNES Implementation Using Single, Complete, Average, and Ward Linkages
+```{r}
+library(cluster)
+
+# Run AGNES clustering using different linkage methods
+agnes_single_method   <- agnes(distance_matrix_euclid, method = "single")     # Single linkage clustering
+agnes_complete_method <- agnes(distance_matrix_euclid, method = "complete")   # Complete linkage clustering
+agnes_average_method  <- agnes(distance_matrix_euclid, method = "average")    # Average linkage clustering
+agnes_ward_method     <- agnes(distance_matrix_euclid, method = "ward")       # Ward's linkage clustering
+
+# Collect agglomerative coefficients to compare method performance
+linkage_scores <- c(
+  single   = agnes_single_method$ac,
+  complete = agnes_complete_method$ac,
+  average  = agnes_average_method$ac,
+  ward     = agnes_ward_method$ac
+)
+
+linkage_scores   # Displays which linkage approach forms the most cohesive clusters
+
+#Interpretation:
+#This section applies hierarchical clustering using several different linkage methods. Each version of the agnes function groups the cereals based on the Euclidean distance matrix but uses a different rule for how clusters should be merged. The single, complete, average, and Ward methods each take a slightly different approach to defining the distance between groups of cereals.
+#After running all four clustering methods, the code gathers their agglomerative coefficients into one vector. The agglomerative coefficient measures how well each method forms tight, well-defined clusters. Higher values indicate a stronger clustering structure. By comparing these scores, we can see which linkage method organizes the cereals in the most meaningful and cohesive way
+
+```
+
+#Step-4 Selecting the Best Linkage Method and Choosing the Number of Clusters
+```{r}
+# Dendrogram visualization using the preferred linkage-Ward's method
+plot(agnes_ward_method, which.plots = 2, 
+     main = "Dendrogram Using Ward's Linkage")       # Plot hierarchical tree structure
+
+# Choose the number of clusters by cutting the dendrogram
+final_cluster_groups <- cutree(agnes_ward_method, k = 4)   # Extract 4 clusters based on visual evaluation
+
+table(final_cluster_groups)                                 # Display how many cereals fall into each cluster
+
+#Interpretation:
+#This part of the analysis focuses on visualizing the results of hierarchical clustering and choosing how many clusters to keep. The dendrogram created from Ward’s method shows how cereals are gradually merged together as the clustering progresses. By looking at this tree-like plot, we can decide where a natural separation occurs among the groups.
+#After examining the dendrogram, the code cuts the tree into four clusters using the cutree() function. This assigns every cereal to one of the four groups. The table() output then summarizes how many cereals fall into each cluster, giving a quick snapshot of the cluster sizes. This step helps transition from the visual clustering structure to a clear, usable set of cluster labels for further analysis
+```
+
+#Step-5 Evaluating Cluster Stability Using Data Partitioning
+```{r}
+set.seed(123)
+
+# Determine total number of cereals in the standardized dataset
+num_items <- nrow(scaled_cereal_data)
+
+# Randomly split the data into two halves: Part A and Part B
+index_A <- sample(1:num_items, size = floor(0.5 * num_items))   # 50% sample for Part A
+index_B <- setdiff(1:num_items, index_A)                        # Remaining 50% for Part B
+
+data_partA <- scaled_cereal_data[index_A, ]   # First half of the data
+data_partB <- scaled_cereal_data[index_B, ]   # Second half of the data
+
+# Run hierarchical clustering on Part A only (Ward method)
+agnes_A <- agnes(dist(data_partA), method = "ward")             # Cluster Part A
+clusters_A <- cutree(agnes_A, k = 4)                            # Assign 4 clusters within Part A
+
+# Compute cluster centroids from Part A
+centroids_A <- aggregate(data_partA, by = list(cluster = clusters_A), FUN = mean)   # Mean values per cluster
+
+# Convert centroid table into a numeric matrix for distance comparison
+centroid_matrix <- as.matrix(centroids_A[, -1])                 # Remove cluster label column
+
+# Assign each observation from Part B to its closest centroid
+assigned_to_A <- apply(data_partB, 1, function(row){
+  dists <- apply(centroid_matrix, 1, function(center){
+    sqrt(sum((row - center)^2))                                # Euclidean distance to each centroid
+  })
+  which.min(dists)                                             # Pick nearest cluster
+})
+
+# Compare Part B’s new assignments to the full-dataset cluster labels
+full_labels_B <- final_cluster_groups[index_B]                 # Full-data cluster assignments for Part B
+
+table(assigned_to_A, full_labels_B)                            # Stability comparison table
+
+#Interpretation:
+#This section tests how stable the clustering results are by checking whether the patterns found in one half of the data hold up in the other half. First, the standardized dataset is randomly split into two equal parts: Part A and Part B. Hierarchical clustering (using Ward’s method) is performed only on Part A, and each cluster’s centroid is calculated to represent the average cereal within that group.
+#Once the centroids from Part A are determined, each cereal from Part B is assigned to the nearest centroid. This effectively checks how well the clustering structure from Part A generalizes to new data that wasn’t used to form the clusters. Finally, the new assignments for Part B are compared with the cluster labels obtained when the entire dataset was used. The comparison table helps evaluate how consistent and reliable the clusters are. If the assignments match well, it suggests strong cluster stability; if not, the clustering structure may not be very robust.
+```
+
+#Step-6 Identifying the Healthy Cereal Cluster for School Cafeterias
+```{r}
+# Load required library
+library(dplyr)
+
+# Calculate mean nutritional values within each cluster
+cluster_means <- numeric_features_df %>%
+  mutate(Cluster = final_cluster_groups) %>%
+  group_by(Cluster) %>%
+  summarise(across(everything(), mean))
+
+# View average nutritional profile for each cluster
+cluster_means
+
+# Add cluster labels to cleaned dataset
+data_with_clusters <- cereal_filtered_df %>%
+  mutate(Cluster = final_cluster_groups)
+
+# Compute a simple health score:
+# low sugar + low fat + low calories + high fiber
+cluster_means <- cluster_means %>%
+  mutate(health_score = (-sugars) + (-fat) + (-calories) + fiber)
+
+# Identify the healthiest cluster (highest health score)
+top_health_cluster <- cluster_means$Cluster[which.max(cluster_means$health_score)]
+
+# List cereal names in that healthiest cluster
+data_with_clusters %>%
+  filter(Cluster == top_health_cluster) %>%
+  select(name)
+
+#Interpretation:
+#In this final step, the goal is to determine which cluster represents the healthiest cereals—especially since the elementary schools want options that support a balanced daily diet. The code starts by calculating the average nutritional values within each cluster. This gives us a clear picture of the typical calories, sugar, fat, and fiber levels found in each group.
+#Next, the cluster labels are added back to the cleaned dataset so that each cereal can be matched to the group it belongs to. To make the comparison easier, a simple health score is created for every cluster. The score rewards high-fiber cereals and penalizes cereals that contain a lot of sugar, fat, or calories. This follows basic nutrition guidelines that are especially important for young children.
+#After computing the health score, the cluster with the highest value is identified as the healthiest option. Finally, the cereals in that cluster are listed. These cereals are the best suited for elementary school cafeterias because they offer lower sugar and fat while providing more fiber—making them a better fit for promoting healthy eating habits among children.
+```
+
